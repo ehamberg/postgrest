@@ -1,0 +1,24 @@
+# Don't use MSBuild
+build: off
+
+# Download stack
+before_test:
+- curl -ostack.zip -L --insecure http://www.stackage.org/stack/windows-i386
+- 7z x stack.zip stack.exe
+- curl -opgsql.zip -L --insecure http://get.enterprisedb.com/postgresql/postgresql-9.5.3-1-windows-x64-binaries.zip
+- 7z x pgsql.zip pgsql
+
+clone_folder: "C:\\postgrest"
+
+environment:
+  global:
+    STACK_ROOT: "C:\\sr"
+
+init:
+  - SET PATH=%PATH%;C:\postgrest\pgsql\bin
+
+test_script:
+- pg_config
+- stack setup --no-terminal > nul
+# The ugly echo "" hack is to avoid complaints about 0 being an invalid file descriptor
+- echo "" | stack install -v postgresql-libpq --extra-include-dirs=c:\postgrest\pgsql\include --extra-lib-dirs=c:\postgrest\pgsql\lib
