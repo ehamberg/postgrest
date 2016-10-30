@@ -5,7 +5,7 @@ build: off
 before_test:
 - curl -ostack.zip -L --insecure http://www.stackage.org/stack/windows-i386
 - 7z x stack.zip stack.exe
-- curl -opgsql.zip -L --insecure http://get.enterprisedb.com/postgresql/postgresql-9.5.3-1-windows-x64-binaries.zip
+- curl -opgsql.zip -L --insecure http://get.enterprisedb.com/postgresql/postgresql-9.5.5-1-windows-x64-binaries.zip
 - 7z x pgsql.zip pgsql
 
 clone_folder: "C:\\postgrest"
