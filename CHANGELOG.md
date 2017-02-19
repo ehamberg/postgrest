@@ -6,6 +6,17 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 ### Added
+- Allow requesting binary output on GET - @steve-chavez
+
+### Fixed
+
+- Resource embedding in views referencing tables in public schema - @fab1an
+
+## [0.4.0.0] - 2017-01-19
+
+### Added
+- Allow test database to be on another host - @dsimunic
+- `Prefer: params=single-object` to treat payload as single json argument in RPC - @dsimunic
 - Ability to generate an OpenAPI spec - @mainx07, @hudayou, @ruslantalpa, @begriffs
 - Ability to generate an OpenAPI spec behind a proxy - @hudayou
 - Ability to set addresses to listen on - @hudayou
@@ -16,14 +27,22 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - Custom request validation with `--pre-request` argument - @begriffs
 - Ability to order by jsonb keys - @steve-chavez
 - Ability to specify offset for a deeper level - @ruslantalpa
+- Ability to use binary base64 encoded secrets - @TrevorBasinger
 
 ### Fixed
 - Do not apply limit to parent items - @ruslantalpa
 - Fix bug in relation detection when selecting parents two levels up by using the name of the FK - @ruslantalpa
 - Customize content negotiation per route - @begriffs
 - Allow using nulls order without explicit order direction - @steve-chavez
+- Fatal error on postgres unsupported version, format supported version in error message - @steve-chavez
+- Prevent database memory cosumption by prepared statements caches - @ruslantalpa
+- Use specific columns in the RETURNING section - @ruslantalpa
+- Fix columns alias for RETURNING - @steve-chavez
 
 ### Changed
+- Replace `Prefer: plurality=singular` with `Accept: application/vnd.pgrst.object` - @begriffs
+- Standardize arrays in responses for `Prefer: return=representation` - @begriffs
+- Calling unknown RPC gives 404, not 400 - @begriffs
 - Use HTTP 400 for raise\_exception - @begriffs
 - Remove non-OpenAPI schema description - @begriffs
 - Use comma rather than semicolon to separate Prefer header values - @begriffs

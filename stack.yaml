@@ -1,7 +1,8 @@
-resolver: lts-7.4
+resolver: lts-8.0
 extra-deps:
   - Ranged-sets-0.3.0
   - hasql-pool-0.4.1
-  - hasql-transaction-0.4.5.1
 ghc-options:
-  postgrest: -O2 -Werror -Wall -fwarn-identities
+  postgrest: -O2 -Werror -Wall -fwarn-identities -fno-warn-redundant-constraints
+nix:
+  packages: [postgresql, zlib]

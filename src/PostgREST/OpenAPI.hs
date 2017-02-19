@@ -20,14 +20,14 @@ import           Protolude hiding              (concat, (&), Proxy, get, interca
 
 import           Data.Swagger
 
-import           PostgREST.ApiRequest        (ContentType(..), toHeader)
+import           PostgREST.ApiRequest        (ContentType(..), toMime)
 import           PostgREST.Config            (prettyVersion)
 import           PostgREST.QueryBuilder      (operators)
 import           PostgREST.Types             (Table(..), Column(..), PgArg(..),
                                               Proxy(..), ProcDescription(..))
 
 makeMimeList :: [ContentType] -> MimeList
-makeMimeList cs = MimeList $ map (fromString . toS . toHeader) cs
+makeMimeList cs = MimeList $ map (fromString . toS . toMime) cs
 
 toSwaggerType :: Text -> SwaggerType t
 toSwaggerType "text"      = SwaggerString
@@ -155,7 +155,7 @@ makeGetParams :: [Column] -> [Param]
 makeGetParams [] =
   makeRangeParams ++
   [ makeSelectParam
-  , makePreferParam ["plurality=singular", "count=none"]
+  , makePreferParam ["count=none"]
   ]
 makeGetParams cs =
   makeRangeParams ++
@@ -168,12 +168,12 @@ makeGetParams cs =
       & in_ .~ ParamQuery
       & type_ .~ SwaggerString
       & enum_ .~ decode (encode $ makeOrderItems cs))
-  , makePreferParam ["plurality=singular", "count=none"]
+  , makePreferParam ["count=none"]
   ]
 
 makePostParams :: Text -> [Param]
 makePostParams tn =
-  [ makePreferParam ["return=representation", "return=representation,plurality=singular",
+  [ makePreferParam ["return=representation",
                      "return=minimal", "return=none"]
   , (mempty :: Param)
     & name        .~ "body"
@@ -182,12 +182,14 @@ makePostParams tn =
     & schema .~ ParamBody (Ref (Reference tn))
   ]
 
-makeProcParam :: Text -> Param
+makeProcParam :: Text -> [Param]
 makeProcParam refName =
-  (mempty :: Param)
+  [ makePreferParam ["params=single-object"]
+  , (mempty :: Param)
     & name     .~ "args"
     & required ?~ True
     & schema   .~ ParamBody (Ref (Reference refName))
+  ]
 
 makeDeleteParams :: [Param]
 makeDeleteParams =
@@ -198,17 +200,17 @@ makePathItem (t, cs, _) = ("/" ++ unpack tn, p $ tableInsertable t)
   where
     tOp = (mempty :: Operation)
       & tags .~ Set.fromList [tn]
-      & produces ?~ makeMimeList [CTApplicationJSON, CTTextCSV]
+      & produces ?~ makeMimeList [CTApplicationJSON, CTSingularJSON, CTTextCSV]
       & at 200 ?~ "OK"
     getOp = tOp
       & parameters .~ map Inline (makeGetParams cs ++ rs)
       & at 206 ?~ "Partial Content"
     postOp = tOp
-      & consumes ?~ makeMimeList [CTApplicationJSON, CTTextCSV]
+      & consumes ?~ makeMimeList [CTApplicationJSON, CTSingularJSON, CTTextCSV]
       & parameters .~ map Inline (makePostParams tn)
       & at 201 ?~ "Created"
     patchOp = tOp
-      & consumes ?~ makeMimeList [CTApplicationJSON, CTTextCSV]
+      & consumes ?~ makeMimeList [CTApplicationJSON, CTSingularJSON, CTTextCSV]
       & parameters .~ map Inline (makePostParams tn ++ rs)
       & at 204 ?~ "No Content"
     deletOp = tOp
@@ -224,9 +226,9 @@ makeProcPathItem :: ProcDescription -> (FilePath, PathItem)
 makeProcPathItem pd = ("/rpc/" ++ toS (pdName pd), pe)
   where
     postOp = (mempty :: Operation)
-      & parameters .~ [Inline (makeProcParam $ "(rpc) " <> pdName pd)]
+      & parameters .~ map Inline (makeProcParam $ "(rpc) " <> pdName pd)
       & tags .~ Set.fromList ["(rpc) " <> pdName pd]
-      & produces ?~ makeMimeList [CTApplicationJSON]
+      & produces ?~ makeMimeList [CTApplicationJSON, CTSingularJSON]
       & at 200 ?~ "OK"
     pe = (mempty :: PathItem) & post ?~ postOp
 

@@ -12,31 +12,10 @@ SET standard_conforming_strings = on;
 SET check_function_bodies = false;
 SET client_min_messages = warning;
 
---
--- Name: postgrest; Type: SCHEMA; Schema: -; Owner: -
---
-
+CREATE SCHEMA public;
 CREATE SCHEMA postgrest;
-
-
---
--- Name: private; Type: SCHEMA; Schema: -; Owner: -
---
-
 CREATE SCHEMA private;
-
-
---
--- Name: test; Type: SCHEMA; Schema: -; Owner: -
---
-
 CREATE SCHEMA test;
-
-
---
--- Name: تست; Type: SCHEMA; Schema: -; Owner: -
---
-
 CREATE SCHEMA تست;
 
 
@@ -48,11 +27,13 @@ CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
 
 SET search_path = public, pg_catalog;
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 --
 -- Name: jwt_token; Type: TYPE; Schema: public; Owner: -
 --
 
-CREATE TYPE jwt_token AS (
+CREATE TYPE public.jwt_token AS (
 	token text
 );
 
@@ -142,6 +123,19 @@ CREATE FUNCTION always_true(test.items) RETURNS boolean
     AS $$ SELECT true $$;
 
 
+create table public_consumers (
+    id                  serial             not null unique,
+    name                text               not null check (name <> ''),
+    primary key (id)
+);
+
+create table public_orders (
+    id                  serial             not null unique,
+    consumer            integer            not null references public_consumers(id),
+    number              integer            not null,
+    primary key (id)
+);
+
 --
 -- Name: anti_id(test.items); Type: FUNCTION; Schema: public; Owner: -
 --
@@ -160,6 +154,14 @@ CREATE TABLE موارد (
 
 
 SET search_path = test, pg_catalog;
+
+
+create view orders_view as
+  select * from public.public_orders;
+
+create view consumers_view as
+  select * from public.public_consumers;
+
 
 --
 -- Name: getitemrange(bigint, bigint); Type: FUNCTION; Schema: test; Owner: -
@@ -323,6 +325,16 @@ CREATE FUNCTION callcounter() RETURNS bigint
 $_$;
 
 --
+-- Name: singlejsonparam(json); Type: FUNCTION; Schema: test; Owner: -
+--
+
+CREATE FUNCTION singlejsonparam(single_param json) RETURNS json
+    LANGUAGE sql
+    AS $_$
+    SELECT single_param;
+$_$;
+
+--
 -- Name: test_empty_rowset(); Type: FUNCTION; Schema: test; Owner: -
 --
 
@@ -371,6 +383,10 @@ CREATE TABLE articles (
 
 
 SET search_path = test, pg_catalog;
+
+CREATE VIEW limited_article_stars AS
+  SELECT article_id, user_id, created_at FROM private.article_stars;
+
 
 --
 -- Name: articleStars; Type: VIEW; Schema: test; Owner: -
@@ -1076,6 +1092,21 @@ CREATE FUNCTION getallprojects() RETURNS SETOF projects
     AS $_$
     SELECT * FROM test.projects;
 $_$;
+
+CREATE FUNCTION setprojects(id_l int, id_h int, name text) RETURNS SETOF projects
+    LANGUAGE sql
+    AS $_$
+    update test.projects set name = $3 WHERE id >= $1 AND id <= $2 returning *;
+$_$;
+
+create table images (
+	name               text not null,
+	img                bytea not null
+);
+
+create view images_base64 as (
+  select name, replace(encode(img, 'base64'), E'\n', '') as img from images
+);
 
 --
 -- PostgreSQL database dump complete

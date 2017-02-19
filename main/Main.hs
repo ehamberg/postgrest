@@ -5,6 +5,7 @@ module Main where
 import           Protolude
 import           PostgREST.App
 import           PostgREST.Config                     (AppConfig (..),
+                                                       PgVersion (..),
                                                        minimumPgVersion,
                                                        prettyVersion,
                                                        readOptions)
@@ -13,9 +14,11 @@ import           PostgREST.OpenAPI                    (isMalformedProxyUri)
 import           PostgREST.DbStructure
 
 import           Control.AutoUpdate
+import           Data.ByteString.Base64               (decode)
 import           Data.String                          (IsString (..))
-import           Data.Text                            (stripPrefix)
-import           Data.Text.IO                         (hPutStrLn)
+import           Data.Text                            (stripPrefix, pack, replace)
+import           Data.Text.Encoding                   (encodeUtf8, decodeUtf8)
+import           Data.Text.IO                         (hPutStrLn, readFile)
 import           Data.Function                        (id)
 import           Data.Time.Clock.POSIX                (getPOSIXTime)
 import qualified Hasql.Query                          as H
@@ -34,11 +37,11 @@ import           System.Posix.Signals
 isServerVersionSupported :: H.Session Bool
 isServerVersionSupported = do
   ver <- H.query () pgVersion
-  return $ toInteger ver >= minimumPgVersion
+  return $ ver >= pgvNum minimumPgVersion
  where
   pgVersion =
-    H.statement "SHOW server_version_num"
-      HE.unit (HD.singleRow $ HD.value HD.int4) True
+    H.statement "SELECT current_setting('server_version_num')::integer"
+      HE.unit (HD.singleRow $ HD.value HD.int4) False
 
 main :: IO ()
 main = do
@@ -67,7 +70,7 @@ main = do
     supported <- isServerVersionSupported
     unless supported $ panic (
       "Cannot run in this PostgreSQL version, PostgREST needs at least "
-      <> show minimumPgVersion)
+      <> pgvName minimumPgVersion)
     getDbStructure (toS $ configSchema conf)
 
   forM_ (lefts [result]) $ \e -> do
@@ -98,9 +101,27 @@ main = do
   runSettings appSettings $ postgrest conf refDbStructure pool getTime
 
 loadSecretFile :: AppConfig -> IO AppConfig
-loadSecretFile conf = do
-  let s = configJwtSecret conf
-  real <- case join (stripPrefix "@" <$> s) of
-            Nothing -> return s -- the string is the secret, not a filename
-            Just filename -> sequence . Just $ readFile (toS filename)
-  return conf { configJwtSecret = real }
+loadSecretFile conf = extractAndTransform mSecret
+  where
+    mSecret   = decodeUtf8 <$> configJwtSecret conf
+    isB64     = configJwtSecretIsBase64 conf
+
+    extractAndTransform :: Maybe Text -> IO AppConfig
+    extractAndTransform Nothing  = return conf
+    extractAndTransform (Just s) =
+      fmap setSecret $ transformString isB64 =<<
+        case stripPrefix "@" s of
+            Nothing       -> return s
+            Just filename -> readFile (toS filename)
+
+    transformString :: Bool -> Text -> IO ByteString
+    transformString False t = return . encodeUtf8 $ t
+    transformString True  t =
+      case decode (encodeUtf8 $ replaceUrlChars t) of
+        Left errMsg -> panic $ pack errMsg
+        Right bs    -> return bs
+
+    setSecret bs = conf { configJwtSecret = Just bs }
+
+    replaceUrlChars = replace "_" "/" . replace "-" "+" . replace "." "="
+        

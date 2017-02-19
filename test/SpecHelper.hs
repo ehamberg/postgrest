@@ -2,11 +2,17 @@ module SpecHelper where
 
 import Control.Monad (void)
 
-import Codec.Binary.Base64.String (encode)
+import qualified System.IO.Error as E
+import System.Environment (getEnv)
+
+import qualified Data.ByteString.Base64 as B64 (encode, decodeLenient)
 import Data.CaseInsensitive (CI(..))
+import qualified Data.Set as S
+import qualified Data.Map.Strict as M
 import Data.List (lookup)
 import Text.Regex.TDFA ((=~))
 import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy as BL
 import System.Process (readProcess)
 
 import PostgREST.Config (AppConfig(..))
@@ -18,10 +24,13 @@ import Network.HTTP.Types
 import Network.Wai.Test (SResponse(simpleStatus, simpleHeaders, simpleBody))
 
 import Data.Maybe (fromJust)
-import Data.Aeson (decode)
-import qualified Data.JsonSchema.Draft4 as D4
+import Data.Aeson (decode, Value(..))
+import qualified JSONSchema.Draft4 as D4
 
 import Protolude
+
+matchContentTypeJson :: MatchHeader
+matchContentTypeJson = "Content-Type" <:> "application/json; charset=utf-8"
 
 validateOpenApiResponse :: [Header] -> WaiSession ()
 validateOpenApiResponse headers = do
@@ -46,45 +55,56 @@ validateOpenApiResponse headers = do
        in
        D4.fetchFilesystemAndValidate schemaContext ((fromJust . decode) respBody) `shouldReturn` Right ()
 
-testDbConn :: Text
-testDbConn = "postgres://postgrest_test_authenticator@localhost:5432/postgrest_test"
+getEnvVarWithDefault :: Text -> Text -> IO Text
+getEnvVarWithDefault var def = do
+  varValue <- getEnv (toS var) `E.catchIOError` const (return $ toS def)
+  return $ toS varValue
 
-testCfg :: AppConfig
-testCfg =
-  AppConfig testDbConn "postgrest_test_anonymous" Nothing "test" "localhost" 3000 (Just "safe") 10 Nothing (Just "test.switch_role") True
+_baseCfg :: AppConfig
+_baseCfg =  -- Connection Settings
+  AppConfig mempty "postgrest_test_anonymous" Nothing "test" "localhost" 3000
+            -- Jwt settings
+            (Just $ encodeUtf8 "safe") False
+            -- Connection Modifiers
+            10 Nothing (Just "test.switch_role")
+            -- Debug Settings
+            True
 
-testCfgNoJWT :: AppConfig
-testCfgNoJWT =
-  AppConfig testDbConn "postgrest_test_anonymous" Nothing "test" "localhost" 3000 Nothing 10 Nothing Nothing True
+testCfg :: Text -> AppConfig
+testCfg testDbConn = _baseCfg { configDatabase = testDbConn }
 
-testUnicodeCfg :: AppConfig
-testUnicodeCfg =
-  AppConfig testDbConn "postgrest_test_anonymous" Nothing "تست" "localhost" 3000 (Just "safe") 10 Nothing Nothing True
+testCfgNoJWT :: Text -> AppConfig
+testCfgNoJWT testDbConn = (testCfg testDbConn) { configJwtSecret = Nothing }
 
-testLtdRowsCfg :: AppConfig
-testLtdRowsCfg =
-  AppConfig testDbConn "postgrest_test_anonymous" Nothing "test" "localhost" 3000 (Just "safe") 10 (Just 2) Nothing True
+testUnicodeCfg :: Text -> AppConfig
+testUnicodeCfg testDbConn = (testCfg testDbConn) { configSchema = "تست" }
 
-testProxyCfg :: AppConfig
-testProxyCfg =
-  AppConfig testDbConn "postgrest_test_anonymous" (Just "https://postgrest.com/openapi.json") "test" "localhost" 3000 (Just "safe") 10 Nothing Nothing True
+testLtdRowsCfg :: Text -> AppConfig
+testLtdRowsCfg testDbConn = (testCfg testDbConn) { configMaxRows = Just 2 }
 
-setupDb :: IO ()
-setupDb = do
-  void $ readProcess "psql" ["-d", "postgres", "-a", "-f", "test/fixtures/database.sql"] []
-  void $ readProcess "psql" ["-d", "postgrest_test", "-a", "-c", "CREATE EXTENSION IF NOT EXISTS pgcrypto;"] []
-  loadFixture "roles"
-  loadFixture "schema"
-  loadFixture "jwt"
-  loadFixture "privileges"
-  resetDb
+testProxyCfg :: Text -> AppConfig
+testProxyCfg testDbConn = (testCfg testDbConn) { configProxyUri = Just "https://postgrest.com/openapi.json" }
 
-resetDb :: IO ()
-resetDb = loadFixture "data"
+testCfgBinaryJWT :: Text -> AppConfig
+testCfgBinaryJWT testDbConn = (testCfg testDbConn) { configJwtSecret = Just secretBs }
+  where secretBs = B64.decodeLenient "h2CGB1FoBd51aQooCS2g+UmRgYQfTPQ6v3+9ALbaqM4="
 
-loadFixture :: FilePath -> IO()
-loadFixture name =
-  void $ readProcess "psql" ["-U", "postgrest_test", "-d", "postgrest_test", "-a", "-f", "test/fixtures/" ++ name ++ ".sql"] []
+
+setupDb :: Text -> IO ()
+setupDb dbConn = do
+  loadFixture dbConn "database"
+  loadFixture dbConn "roles"
+  loadFixture dbConn "schema"
+  loadFixture dbConn "jwt"
+  loadFixture dbConn "privileges"
+  resetDb dbConn
+
+resetDb :: Text -> IO ()
+resetDb dbConn = loadFixture dbConn "data"
+
+loadFixture :: Text -> FilePath -> IO()
+loadFixture dbConn name =
+  void $ readProcess "psql" [toS dbConn, "-a", "-f", "test/fixtures/" ++ name ++ ".sql"] []
 
 rangeHdrs :: ByteRange -> [Header]
 rangeHdrs r = [rangeUnit, (hRange, renderByteRange r)]
@@ -104,8 +124,20 @@ matchHeader name valRegex headers =
 
 authHeaderBasic :: BS.ByteString -> BS.ByteString -> Header
 authHeaderBasic u p =
-  (hAuthorization, "Basic " <> (toS . encode . toS $ u <> ":" <> p))
+  (hAuthorization, "Basic " <> (toS . B64.encode . toS $ u <> ":" <> p))
 
 authHeaderJWT :: BS.ByteString -> Header
 authHeaderJWT token =
   (hAuthorization, "Bearer " <> token)
+
+-- | Tests whether the text can be parsed as a json object comtaining
+-- the key "message", and optional keys "details", "hint", "code",
+-- and no extraneous keys
+isErrorFormat :: BL.ByteString -> Bool
+isErrorFormat s =
+  "message" `S.member` keys &&
+    S.null (S.difference keys validKeys)
+ where
+  obj = decode s :: Maybe (M.Map Text Value)
+  keys = fromMaybe S.empty (M.keysSet <$> obj)
+  validKeys = S.fromList ["message", "details", "hint", "code"]

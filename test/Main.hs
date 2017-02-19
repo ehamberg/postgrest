@@ -13,6 +13,7 @@ import Data.IORef
 import Data.Time.Clock.POSIX   (getPOSIXTime)
 
 import qualified Feature.AuthSpec
+import qualified Feature.BinaryJwtSecretSpec
 import qualified Feature.ConcurrentSpec
 import qualified Feature.CorsSpec
 import qualified Feature.DeleteSpec
@@ -22,6 +23,7 @@ import qualified Feature.QueryLimitedSpec
 import qualified Feature.QuerySpec
 import qualified Feature.RangeSpec
 import qualified Feature.StructureSpec
+import qualified Feature.SingularSpec
 import qualified Feature.UnicodeSpec
 import qualified Feature.ProxySpec
 
@@ -29,7 +31,8 @@ import Protolude
 
 main :: IO ()
 main = do
-  setupDb
+  testDbConn <- getEnvVarWithDefault "POSTGREST_TEST_CONNECTION" "postgres://postgrest_test@localhost/postgrest_test"
+  setupDb testDbConn
 
   pool <- P.acquire (3, 10, toS testDbConn)
   -- ask for the OS time at most once per second
@@ -39,30 +42,36 @@ main = do
 
   result <- P.use pool $ getDbStructure "test"
   refDbStructure <- newIORef $ either (panic.show) id result
-  let withApp = return $ postgrest testCfg refDbStructure pool getTime
-      ltdApp  = return $ postgrest testLtdRowsCfg refDbStructure pool getTime
-      unicodeApp = return $ postgrest testUnicodeCfg refDbStructure pool getTime
-      proxyApp = return $ postgrest testProxyCfg refDbStructure pool getTime
-      noJwtApp = return $ postgrest testCfgNoJWT refDbStructure pool getTime
+  let withApp      = return $ postgrest (testCfg testDbConn)          refDbStructure pool getTime
+      ltdApp       = return $ postgrest (testLtdRowsCfg testDbConn)   refDbStructure pool getTime
+      unicodeApp   = return $ postgrest (testUnicodeCfg testDbConn)   refDbStructure pool getTime
+      proxyApp     = return $ postgrest (testProxyCfg testDbConn)     refDbStructure pool getTime
+      noJwtApp     = return $ postgrest (testCfgNoJWT testDbConn)     refDbStructure pool getTime
+      binaryJwtApp = return $ postgrest (testCfgBinaryJWT testDbConn) refDbStructure pool getTime
 
+  let reset = resetDb testDbConn
   hspec $ do
-    mapM_ (beforeAll_ resetDb . before withApp) specs
+    mapM_ (beforeAll_ reset . before withApp) specs
 
     -- this test runs with a different server flag
-    beforeAll_ resetDb . before ltdApp $
+    beforeAll_ reset . before ltdApp $
       describe "Feature.QueryLimitedSpec" Feature.QueryLimitedSpec.spec
 
     -- this test runs with a different schema
-    beforeAll_ resetDb . before unicodeApp $
+    beforeAll_ reset . before unicodeApp $
       describe "Feature.UnicodeSpec" Feature.UnicodeSpec.spec
 
     -- this test runs with a proxy
-    beforeAll_ resetDb . before proxyApp $
+    beforeAll_ reset . before proxyApp $
       describe "Feature.ProxySpec" Feature.ProxySpec.spec
 
     -- this test runs without a JWT secret
-    beforeAll_ resetDb . before noJwtApp $
+    beforeAll_ reset . before noJwtApp $
       describe "Feature.NoJwtSpec" Feature.NoJwtSpec.spec
+
+    -- this test runs with a binary JWT secret
+    beforeAll_ reset . before binaryJwtApp $
+      describe "Feature.BinaryJwtSecretSpec" Feature.BinaryJwtSecretSpec.spec
 
  where
   specs = map (uncurry describe) [
@@ -73,5 +82,6 @@ main = do
     , ("Feature.InsertSpec"       , Feature.InsertSpec.spec)
     , ("Feature.QuerySpec"        , Feature.QuerySpec.spec)
     , ("Feature.RangeSpec"        , Feature.RangeSpec.spec)
+    , ("Feature.SingularSpec"     , Feature.SingularSpec.spec)
     , ("Feature.StructureSpec"    , Feature.StructureSpec.spec)
     ]

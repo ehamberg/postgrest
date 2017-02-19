@@ -6,6 +6,9 @@ cabal.sandbox.config
 hscope.out
 codex.tags
 .anvil
-.stack-work
+.stack-work*
 tags
 site
+*~
+*#*
+.#*

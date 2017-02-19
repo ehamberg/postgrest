@@ -2,27 +2,45 @@
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
-module PostgREST.Error (pgErrResponse, errResponse, prettyUsageError) where
+module PostgREST.Error (
+  apiRequestErrResponse
+, pgErrResponse
+, errResponse
+, prettyUsageError
+, singularityError
+, binaryFieldError
+, formatGeneralError
+, formatParserError
+) where
 
 import           Protolude
 import           Data.Aeson                ((.=))
 import qualified Data.Aeson                as JSON
-import qualified Data.Text                 as T
+import           Data.Text                 (replace, strip, unwords)
 import qualified Hasql.Pool                as P
 import qualified Hasql.Session             as H
 import qualified Network.HTTP.Types.Status as HT
 import           Network.Wai               (Response, responseLBS)
-import           PostgREST.ApiRequest      (ctToHeader, ContentType(..))
+import           PostgREST.ApiRequest      (toHeader, toMime, ContentType(..), ApiRequestError(..))
+import           Text.Parsec.Error
+
+apiRequestErrResponse :: ApiRequestError -> Response
+apiRequestErrResponse err =
+  case err of
+    ErrorActionInappropriate -> errResponse HT.status405 "Bad Request"
+    ErrorInvalidBody errorMessage -> errResponse HT.status400 $ toS errorMessage
+    ErrorInvalidRange -> errResponse HT.status416 "HTTP Range error"
 
 errResponse :: HT.Status -> Text -> Response
-errResponse status message = responseLBS status
-  [ctToHeader CTApplicationJSON]
-  (toS $ T.concat ["{\"message\":\"",message,"\"}"])
+errResponse status message = jsonErrResponse status $ JSON.object ["message" .= message]
+
+jsonErrResponse :: HT.Status -> JSON.Value -> Response
+jsonErrResponse status message = responseLBS status [toHeader CTApplicationJSON] $ JSON.encode message
 
 pgErrResponse :: Bool -> P.UsageError -> Response
 pgErrResponse authed e =
   let status = httpStatus authed e
-      jsonType = ctToHeader CTApplicationJSON
+      jsonType = toHeader CTApplicationJSON
       wwwAuth = ("WWW-Authenticate", "Bearer")
       hdrs = if status == HT.status401
                 then [jsonType, wwwAuth]
@@ -33,6 +51,33 @@ prettyUsageError :: P.UsageError -> Text
 prettyUsageError (P.ConnectionError e) =
   "Database connection error:\n" <> toS (fromMaybe "" e)
 prettyUsageError e = show $ JSON.encode e
+
+singularityError :: Integer -> Response
+singularityError numRows =
+  responseLBS HT.status406
+    [toHeader CTSingularJSON]
+    $ toS . formatGeneralError
+      "JSON object requested, multiple (or no) rows returned"
+      $ unwords
+        [ "Results contain", show numRows, "rows,"
+        , toS (toMime CTSingularJSON), "requires 1 row"
+        ]
+
+binaryFieldError :: Response
+binaryFieldError = 
+  errResponse HT.status406 (toS (toMime CTOctetStream) <>
+  " requested but a single column was not selected")
+
+formatParserError :: ParseError -> Text
+formatParserError e = formatGeneralError message details
+  where
+     message = show $ errorPos e
+     details = strip $ replace "\n" " " $ toS
+       $ showErrorMessages "or" "unknown parse error" "expecting" "unexpected" "end of input" (errorMessages e)
+
+formatGeneralError :: Text -> Text -> Text
+formatGeneralError message details = toS . JSON.encode $
+  JSON.object ["message" .= message, "details" .= details]
 
 instance JSON.ToJSON P.UsageError where
   toJSON (P.ConnectionError e) = JSON.object [
@@ -96,6 +141,7 @@ httpStatus authed (P.SessionError (H.ResultError (H.ServerError c _ _ _))) =
     "P0001"   -> HT.status400 -- default code for "raise"
     'P':'0':_ -> HT.status500 -- PL/pgSQL Error
     'X':'X':_ -> HT.status500 -- internal Error
+    "42883"   -> HT.status404 -- undefined function
     "42P01"   -> HT.status404 -- undefined table
     "42501"   -> if authed then HT.status403 else HT.status401 -- insufficient privilege
     _         -> HT.status400
